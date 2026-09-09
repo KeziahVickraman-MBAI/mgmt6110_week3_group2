@@ -412,19 +412,35 @@ export default function LiveBusArrivalPanel({
           </div>
         )}
 
-        {/* Case: Entire stop has no buses running (empty services array handled as "no buses running", not an error) */}
+        {/* Case: Entire stop has no buses running OR 401 error */}
         {!isLoading && services.length === 0 && (
           <div
             id="empty-services-message"
-            className="p-12 text-center bg-zinc-50/50"
+            className="p-10 text-center bg-zinc-50/50"
           >
             <Bus className="w-8 h-8 text-zinc-300 mx-auto mb-2" />
             <p className="text-base font-semibold text-zinc-700">
-              No buses currently running for this bus stop.
+              {healthData?.checks?.upstream?.httpCode === 401
+                ? 'LTA AccountKey Not Recognized by Upstream (401)'
+                : 'No buses currently running for this bus stop.'}
             </p>
-            <p className="text-xs text-zinc-400 mt-1 max-w-sm mx-auto">
-              The transit schedule indicates no active buses are serving Stop #{busStopCode} at this hour.
+            <p className="text-xs text-zinc-500 mt-1 max-w-md mx-auto leading-relaxed">
+              {healthData?.checks?.upstream?.httpCode === 401
+                ? 'LTA DataMall rejected the AccountKey with HTTP 401. This occurs when the key has expired, is awaiting 24h approval on DataMall, or has not yet propagated. You can view mock data to evaluate the UI.'
+                : `The transit schedule indicates no active buses are serving Stop #${busStopCode} at this hour.`}
             </p>
+            {healthData?.checks?.upstream?.httpCode === 401 && (
+              <div className="mt-4 flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fetchBusArrivals(busStopCode, true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-zinc-900 text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Preview Simulated Live Arrivals</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
