@@ -1,0 +1,6 @@
+{
+  "name": "Singapore Bus Arrival Times",
+  "description": "Minimalist Singapore bus arrival time tracker to search bus stops and receive updated arrival times.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
