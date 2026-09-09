@@ -21,8 +21,9 @@ export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json');
 
   const nowIso = getSingaporeIsoString();
-  const accountKey = process.env.LTA_ACCOUNT_KEY;
-  const keyConfigured = Boolean(accountKey && accountKey.trim().length > 0);
+  const rawKey = process.env.LTA_ACCOUNT_KEY;
+  const accountKey = typeof rawKey === 'string' ? rawKey.trim().replace(/^["']|["']$/g, '') : '';
+  const keyConfigured = Boolean(accountKey && accountKey.length > 0);
 
   // If key is not configured, report failure immediately with 503
   if (!keyConfigured) {

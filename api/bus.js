@@ -22,7 +22,8 @@ export default async function handler(req, res) {
     }
   }
 
-  const accountKey = process.env.LTA_ACCOUNT_KEY;
+  const rawKey = process.env.LTA_ACCOUNT_KEY;
+  const accountKey = typeof rawKey === 'string' ? rawKey.trim().replace(/^["']|["']$/g, '') : '';
 
   // Handle missing key without crashing or logging credential
   if (!accountKey) {
