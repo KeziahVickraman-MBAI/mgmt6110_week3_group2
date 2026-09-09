@@ -353,6 +353,10 @@ export default function LiveBusArrivalPanel({
               <span className="text-amber-700 font-medium">
                 LTA_ACCOUNT_KEY not configured in environment (Serverless ready)
               </span>
+            ) : healthData?.checks?.upstream?.httpCode === 401 ? (
+              <span className="text-red-700 font-medium">
+                401 Unauthorized — LTA DataMall rejected the AccountKey credential
+              </span>
             ) : (
               <span className="text-zinc-600">
                 {isHealthChecking ? 'Checking /api/health...' : 'Service online'}
