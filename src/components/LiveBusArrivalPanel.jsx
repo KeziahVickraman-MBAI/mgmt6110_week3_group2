@@ -355,7 +355,13 @@ export default function LiveBusArrivalPanel({
               </span>
             ) : healthData?.checks?.upstream?.httpCode === 401 ? (
               <span className="text-red-700 font-medium">
-                401 Unauthorized — LTA DataMall rejected the AccountKey credential
+                401 Unauthorized — LTA DataMall rejected AccountKey{' '}
+                {healthData?.checks?.keyDetails?.preview && (
+                  <span className="text-red-600 font-normal">
+                    ({healthData.checks.keyDetails.preview}, {healthData.checks.keyDetails.length} chars
+                    {healthData.checks.keyDetails.hasPrefixRemoved ? ', stripped prefix' : ''})
+                  </span>
+                )}
               </span>
             ) : (
               <span className="text-zinc-600">

@@ -1,6 +1,34 @@
 // /api/bus.js - Serverless function for LTA Bus Arrival Times
 // Sibling of package.json at api/ in the project root
 
+// Thoroughly clean and sanitize the LTA key
+function sanitizeAccountKey(raw) {
+  if (!raw || typeof raw !== 'string') {
+    return { key: '', rawLength: 0, sanitizedLength: 0, hasPrefix: false, preview: '' };
+  }
+  const rawLength = raw.length;
+  // Remove zero-width characters, BOM, non-breaking space, newlines
+  let cleaned = raw.replace(/[\u200B-\u200D\uFEFF\u00A0\r\n\t]/g, '').trim();
+  // Strip outer quotes
+  cleaned = cleaned.replace(/^["'“”‘’]|["'“”‘’]$/g, '').trim();
+  // Check for common accidental prefixes like "AccountKey: <key>", "Key=<key>"
+  const hasPrefix = /^(?:AccountKey|Account_Key|API_Key|Key|Token|Bearer)\s*[:=]\s*/i.test(cleaned);
+  cleaned = cleaned.replace(/^(?:AccountKey|Account_Key|API_Key|Key|Token|Bearer)\s*[:=]\s*/i, '').trim();
+  cleaned = cleaned.replace(/^["'“”‘’]|["'“”‘’]$/g, '').trim();
+
+  const preview = cleaned.length > 6
+    ? `${cleaned.slice(0, 3)}***${cleaned.slice(-3)}`
+    : (cleaned ? '***' : '');
+
+  return {
+    key: cleaned,
+    rawLength,
+    sanitizedLength: cleaned.length,
+    hasPrefix,
+    preview,
+  };
+}
+
 export default async function handler(req, res) {
   // LTA DataMall Bus Arrival data refreshes every 20 seconds
   res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=40');
@@ -23,10 +51,10 @@ export default async function handler(req, res) {
   }
 
   const rawKey = process.env.LTA_ACCOUNT_KEY;
-  const accountKey = typeof rawKey === 'string' ? rawKey.trim().replace(/^["']|["']$/g, '') : '';
+  const keyInfo = sanitizeAccountKey(rawKey);
 
   // Handle missing key without crashing or logging credential
-  if (!accountKey) {
+  if (!keyInfo.key) {
     res.setHeader('Content-Type', 'application/json');
     res.statusCode = 503;
     return res.end(
@@ -39,24 +67,43 @@ export default async function handler(req, res) {
   }
 
   try {
-    const ltaEndpoint = `https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode=${encodeURIComponent(
-      busStopCode
-    )}`;
+    const encodedCode = encodeURIComponent(busStopCode);
+    const endpointsToTry = [
+      `https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode=${encodedCode}`,
+      `https://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode=${encodedCode}`,
+    ];
 
-    const upstreamResponse = await fetch(ltaEndpoint, {
-      method: 'GET',
-      headers: {
-        AccountKey: accountKey,
-        accept: 'application/json',
-      },
-    });
+    let upstreamResponse = null;
+    let lastStatus = 500;
 
-    if (!upstreamResponse.ok) {
+    for (const endpoint of endpointsToTry) {
+      try {
+        const response = await fetch(endpoint, {
+          method: 'GET',
+          headers: {
+            AccountKey: keyInfo.key,
+            accept: 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) SGTransitApp/1.0',
+          },
+        });
+        lastStatus = response.status;
+        if (response.ok) {
+          upstreamResponse = response;
+          break;
+        }
+      } catch {
+        // Continue to fallback endpoint
+      }
+    }
+
+    if (!upstreamResponse || !upstreamResponse.ok) {
       res.setHeader('Content-Type', 'application/json');
-      res.statusCode = upstreamResponse.status || 502;
+      res.statusCode = lastStatus || 502;
       return res.end(
         JSON.stringify({
-          error: `LTA DataMall responded with HTTP ${upstreamResponse.status}`,
+          error: `LTA DataMall responded with HTTP ${lastStatus}`,
+          keyConfigured: true,
+          keyLength: keyInfo.sanitizedLength,
           services: [],
         })
       );
