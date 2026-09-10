@@ -44,6 +44,31 @@ function sanitizeAccountKey(raw) {
   };
 }
 
+// Generate candidate keys including base64 padding repair
+function getCandidateKeys(raw) {
+  const info = sanitizeAccountKey(raw);
+  if (!info.key) return [];
+
+  const candidates = [info.key];
+
+  // In LTA DataMall, 16-byte keys base64-encoded are exactly 24 characters ending in '=='
+  // Double-clicking in many email clients/browsers truncates trailing punctuation '=='
+  // If length % 4 === 2 (e.g. 22 chars), appending '==' repairs base64 padding
+  if (!info.key.endsWith('==') && info.key.length % 4 === 2) {
+    candidates.push(info.key + '==');
+  } else if (!info.key.endsWith('=') && info.key.length % 4 === 3) {
+    candidates.push(info.key + '=');
+  } else if (info.key.endsWith('==')) {
+    candidates.push(info.key.slice(0, -2));
+  }
+
+  return Array.from(new Set(candidates)).map((k) => ({
+    key: k,
+    length: k.length,
+    preview: k.length > 6 ? `${k.slice(0, 3)}***${k.slice(-3)}` : k,
+  }));
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Content-Type', 'application/json');
@@ -51,7 +76,8 @@ export default async function handler(req, res) {
   const nowIso = getSingaporeIsoString();
   const rawKey = process.env.LTA_ACCOUNT_KEY;
   const keyInfo = sanitizeAccountKey(rawKey);
-  const keyConfigured = Boolean(keyInfo.key && keyInfo.key.length > 0);
+  const candidates = getCandidateKeys(rawKey);
+  const keyConfigured = candidates.length > 0;
 
   // If key is not configured, report failure immediately with 503
   if (!keyConfigured) {
@@ -75,37 +101,48 @@ export default async function handler(req, res) {
   }
 
   const startTime = Date.now();
-  const endpointsToTry = [
-    'https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode=04121',
-    'https://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode=04121',
-  ];
+  const endpoint = 'https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode=04121';
 
-  let lastStatus = 500;
-  let successEndpoint = null;
+  let workingCandidate = null;
+  const attempts = [];
 
-  for (const endpoint of endpointsToTry) {
+  for (const candidate of candidates) {
+    const attemptStart = Date.now();
     try {
       const response = await fetch(endpoint, {
         method: 'GET',
         headers: {
-          AccountKey: keyInfo.key,
+          AccountKey: candidate.key,
           accept: 'application/json',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) SGTransitApp/1.0',
         },
       });
 
-      lastStatus = response.status;
+      const attemptMs = Date.now() - attemptStart;
+      attempts.push({
+        keyPreview: candidate.preview,
+        length: candidate.length,
+        httpCode: response.status,
+        ms: attemptMs,
+      });
+
       if (response.status === 200) {
-        successEndpoint = endpoint;
+        workingCandidate = candidate;
         break;
       }
-    } catch {
-      // Continue to next endpoint if network or timeout
+    } catch (err) {
+      attempts.push({
+        keyPreview: candidate.preview,
+        length: candidate.length,
+        httpCode: null,
+        error: err.message,
+        ms: Date.now() - attemptStart,
+      });
     }
   }
 
   const elapsedMs = Date.now() - startTime;
-  const isSuccess = successEndpoint !== null;
+  const isSuccess = workingCandidate !== null;
 
   if (isSuccess) {
     cachedLastGoodFetch = nowIso;
@@ -118,21 +155,24 @@ export default async function handler(req, res) {
           keyConfigured: true,
           keyDetails: {
             configured: true,
-            length: keyInfo.sanitizedLength,
-            preview: keyInfo.preview,
+            length: workingCandidate.length,
+            preview: workingCandidate.preview,
             hasPrefixRemoved: keyInfo.hasPrefix,
+            autoPadded: workingCandidate.key !== keyInfo.key,
           },
           upstream: {
             status: 'pass',
             httpCode: 200,
-            endpoint: successEndpoint,
+            endpoint,
             ms: elapsedMs,
           },
+          attempts,
           lastGoodFetch: cachedLastGoodFetch,
         },
       })
     );
   } else {
+    const primaryAttempt = attempts[0] || {};
     res.statusCode = 503;
     return res.end(
       JSON.stringify({
@@ -145,13 +185,15 @@ export default async function handler(req, res) {
             length: keyInfo.sanitizedLength,
             preview: keyInfo.preview,
             hasPrefixRemoved: keyInfo.hasPrefix,
+            note: keyInfo.sanitizedLength === 22 ? 'Standard LTA Base64 keys are 24 characters ending in ==. Both raw (22) and padded (24) were tested.' : undefined,
           },
           upstream: {
             status: 'fail',
-            httpCode: lastStatus,
-            endpointsTested: endpointsToTry,
+            httpCode: primaryAttempt.httpCode || 401,
+            endpoint,
             ms: elapsedMs,
           },
+          attempts,
           lastGoodFetch: cachedLastGoodFetch,
         },
       })

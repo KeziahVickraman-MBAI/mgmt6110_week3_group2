@@ -29,6 +29,27 @@ function sanitizeAccountKey(raw) {
   };
 }
 
+// Generate candidate keys including base64 padding repair
+function getCandidateKeys(raw) {
+  const info = sanitizeAccountKey(raw);
+  if (!info.key) return [];
+
+  const candidates = [info.key];
+
+  // In LTA DataMall, 16-byte keys base64-encoded are exactly 24 characters ending in '=='
+  // Double-clicking in many email clients/browsers truncates trailing punctuation '=='
+  // If length % 4 === 2 (e.g. 22 chars), appending '==' repairs base64 padding
+  if (!info.key.endsWith('==') && info.key.length % 4 === 2) {
+    candidates.push(info.key + '==');
+  } else if (!info.key.endsWith('=') && info.key.length % 4 === 3) {
+    candidates.push(info.key + '=');
+  } else if (info.key.endsWith('==')) {
+    candidates.push(info.key.slice(0, -2));
+  }
+
+  return Array.from(new Set(candidates));
+}
+
 export default async function handler(req, res) {
   // LTA DataMall Bus Arrival data refreshes every 20 seconds
   res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=40');
@@ -52,9 +73,10 @@ export default async function handler(req, res) {
 
   const rawKey = process.env.LTA_ACCOUNT_KEY;
   const keyInfo = sanitizeAccountKey(rawKey);
+  const candidates = getCandidateKeys(rawKey);
 
   // Handle missing key without crashing or logging credential
-  if (!keyInfo.key) {
+  if (candidates.length === 0) {
     res.setHeader('Content-Type', 'application/json');
     res.statusCode = 503;
     return res.end(
@@ -68,20 +90,17 @@ export default async function handler(req, res) {
 
   try {
     const encodedCode = encodeURIComponent(busStopCode);
-    const endpointsToTry = [
-      `https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode=${encodedCode}`,
-      `https://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode=${encodedCode}`,
-    ];
+    const endpoint = `https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode=${encodedCode}`;
 
     let upstreamResponse = null;
     let lastStatus = 500;
 
-    for (const endpoint of endpointsToTry) {
+    for (const key of candidates) {
       try {
         const response = await fetch(endpoint, {
           method: 'GET',
           headers: {
-            AccountKey: keyInfo.key,
+            AccountKey: key,
             accept: 'application/json',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) SGTransitApp/1.0',
           },
@@ -92,7 +111,7 @@ export default async function handler(req, res) {
           break;
         }
       } catch {
-        // Continue to fallback endpoint
+        // Continue to next candidate
       }
     }
 
